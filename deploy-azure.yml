@@ -1,0 +1,58 @@
+name: Deploy to Azure App Service (manual)
+on:
+  workflow_dispatch:
+    inputs:
+      app_name:
+        description: Existing Azure Web App name
+        required: true
+        type: string
+      resource_group:
+        description: Azure resource group (for reference)
+        required: true
+        type: string
+permissions:
+  id-token: write
+  contents: read
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -r requirements.txt
+      - run: pytest -q
+      - name: Azure login with GitHub OIDC
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      - name: Build and push image to Azure Container Registry
+        id: acr
+        env:
+          ACR_NAME: ${{ vars.AZURE_ACR_NAME }}
+          APP_NAME: ${{ inputs.app_name }}
+        run: |
+          az acr login --name "$ACR_NAME"
+          IMAGE="$ACR_NAME.azurecr.io/cerevyn-ps04:${GITHUB_SHA}"
+          docker build -t "$IMAGE" .
+          docker push "$IMAGE"
+          echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
+      - name: Configure Web App container
+        env:
+          APP_NAME: ${{ inputs.app_name }}
+          IMAGE: ${{ steps.acr.outputs.image }}
+          RESOURCE_GROUP: ${{ inputs.resource_group }}
+          ACR_NAME: ${{ vars.AZURE_ACR_NAME }}
+        run: |
+          ACR_USER=$(az acr credential show --name "$ACR_NAME" --query username -o tsv)
+          ACR_PASS=$(az acr credential show --name "$ACR_NAME" --query 'passwords[0].value' -o tsv)
+          az webapp config container set --name "$APP_NAME" --resource-group "$RESOURCE_GROUP" \
+            --docker-custom-image-name "$IMAGE" --docker-registry-server-url "https://$ACR_NAME.azurecr.io" \
+            --docker-registry-server-user "$ACR_USER" --docker-registry-server-password "$ACR_PASS"
+          az webapp config appsettings set --name "$APP_NAME" --resource-group "$RESOURCE_GROUP" \
+            --settings WEBSITES_PORT=8000 DB_PATH=/home/data/tickets.db
+          az webapp restart --name "$APP_NAME" --resource-group "$RESOURCE_GROUP"
