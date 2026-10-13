@@ -12,7 +12,6 @@ from fastapi import FastAPI, HTTPException, status
 from pydantic import BaseModel, Field, field_validator
 
 APP_DIR = Path(__file__).resolve().parent
-DB_PATH = os.getenv("DB_PATH", str(APP_DIR.parent / "tickets.db"))
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
